@@ -1,25 +1,15 @@
-# 构建产物
+# 编译产物
 build/
-build_*/
-cmake-build-*/
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-Makefile
-compile_commands.json
 
-# 编译中间件
-*.o
-*.a
-*.so
-*.out
-*.exe
 
-# 可执行文件
-test_read
-
-# 编辑器/系统
+# vscode 配置
 .vscode/
-.cache/
-*.swp
-.DS_Store
+
+# CUDA 临时文件
+*.o
+*.so
+*.a
+*.out
+
+
+core.*
