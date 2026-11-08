@@ -2,7 +2,7 @@
 
 using namespace std;
 #define FILE_PATH "/home/waster/data/sim/SIM_00001.bin"
-
+#define DATATIME_EXAMPLE "2024-09-29 10:00:00.000"
 
 int main(int argc,char **argv)
 {
@@ -12,7 +12,9 @@ int main(int argc,char **argv)
             readframe:读取帧数\n \
             frame_header:读取帧头 需要指明第几帧 \
             例如：“frame_header 1” \n \
-            frame_data:读数据体 需要指明第几帧\n");
+            frame_data:读数据体 需要指明第几帧\n \
+            frame_date:读日期时间 需要指明第几帧\n");
+
             return -1;
     }
     int64_t ret;
@@ -76,6 +78,21 @@ int main(int argc,char **argv)
             return -1;
         }
     
+    }
+    else if (command_in == "frame_date")
+    {
+        int64_t idx = strtoll(argv[2], nullptr, 10);
+        string buf;
+        if(bin_read_time(FILE_PATH,idx,buf) != -1)
+        {
+            cout<<"读取帧日期时间成功"<<endl;
+            cout<<buf<<endl;
+        }
+        else
+        {
+            cout<<"读取帧日期时间失败"<<endl;
+            return -1;
+        }
     }
     else
         cout<<"未知命令"<<endl;

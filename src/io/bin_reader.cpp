@@ -144,3 +144,69 @@ int bin_read_frame_data(const char *path, int64_t idx, float *out_cs)
     fclose(fp);
     return 0;
 }
+
+
+int bin_read_time(const char *path, int64_t idx, string& buf)
+{
+    FILE *fp = nullptr;
+    if(!fileop_check(fp,path))
+        return -1;
+    off_t idbytes = FILE_HDR_BYTES + (off_t)idx*FRAME_BYTES + FRAME_HDR_BYTES_FNON;
+    if(0>fseeko(fp,idbytes,SEEK_SET))
+    {
+        fprintf(stderr, "[ERROR] fseeko failed, path: %s, errno: %d, msg: %s\n",
+                path, errno, strerror(errno));
+        fclose(fp);
+        return -1;
+    }
+    //读取日期
+    uint32_t datatime[3];
+    size_t read_bytes = fread(datatime,4,3,fp);
+    if(read_bytes<3)
+    {
+        if(ferror(fp))
+        {
+            fprintf(stderr, "[ERROR] fread failed, path: %s, errno: %d, msg: %s\n",
+                path, errno, strerror(errno));
+            fclose(fp);
+            return -1;
+        }
+        else 
+        {
+            fclose(fp);
+            fprintf(stderr, "[WARN]剩余数据不足4字节（uint_32）bytes，共读取%zu个字节\n",read_bytes);
+            return -1;  
+        }
+    }
+    /*提取出来的data数据为0xYYYY MM DD,即0x20261107
+    要返回十进制20261107*/
+    datetime typ;
+    typ = Date;
+    uint64_t data_dec = bcd_date_to_integer(datatime[0],typ);
+    
+    //读取时间
+    typ = Time_intuitive;
+    uint32_t time = bcd_date_to_integer(datatime[1],typ);
+    
+    //读取纳秒
+    uint32_t time_ns = datatime[2];
+
+    /* 日期 YYYYMMDD / 时间 HHMMSS 都是【十进制】数，只能用 / 和 % 拆位；
+       用 >> 位移拆的是二进制位，和十进制位无关 */
+    int year   = (int)(data_dec / 10000);
+    int month  = (int)((data_dec / 100) % 100);
+    int day    = (int)(data_dec % 100);
+
+    int hour   = (int)(time / 10000);
+    int minute = (int)((time / 100) % 100);
+    int second = (int)(time % 100);
+
+    int msec = (int)(time_ns / 1000000);   /* 纳秒 -> 毫秒 3 位 */
+
+    char s[64];
+    snprintf(s, sizeof s, "%04d-%02d-%02d %02d:%02d:%02d.%03d",
+             year, month, day, hour, minute, second, msec);
+    buf = s;
+ 
+    return 0;
+}

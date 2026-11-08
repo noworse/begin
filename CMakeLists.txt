@@ -4,9 +4,11 @@ cmake_minimum_required(VERSION 3.18)
 # project(PRO VERSION 1.0.0 LANGUAGES CUDA CXX)
 project(BEG VERSION 1.0.0 LANGUAGES CXX)
 #设置C标准
-set(CMAKE_CXX_STANDARD  17)
+set(CMAKE_CXX_STANDARD  20)
 #强制使用设置的标准
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# 导出 compile_commands.json，供 VS Code IntelliSense 复用真实编译参数
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 #添加编译选项
 add_compile_options(-Wall -Wextra -O2)
 # #设置cuda编译版本
@@ -25,9 +27,11 @@ set(EXEC_PATH ${CMAKE_BINARY_DIR})
 
 
 #设置目标所需文件夹以编译库
+set(FUNC_LIB func)
 set(IO_LIB binio)
 #设置最终生成可执行文件别名
 set(TEST test_read)
 #添加子源文件夹
+add_subdirectory(src/function)
 add_subdirectory(src/io)
 add_subdirectory(test)

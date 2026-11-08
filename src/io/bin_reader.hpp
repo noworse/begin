@@ -2,6 +2,7 @@
 #define BIN_READER_H
 
 #include "bin_format.hpp"
+#include "function.hpp"
 #include <cstdint>
 #include <stdio.h>
 #include <errno.h>
@@ -12,6 +13,9 @@
 #include <sys/types.h>
 #include <string>
 #include <iostream>
+
+using namespace std;
+
 /* 返回帧数；失败返回 -1 */
 int64_t bin_frame_count(const char *path);
 /* 读第 idx 帧（0 基）的 72 字节帧头到 out；成功 0，失败 -1 */
@@ -19,5 +23,9 @@ int bin_read_frame_header(const char *path, int64_t idx, uint8_t *out72);
 /* 读第 idx 帧的数据体：out 为 256×32 的 float32（行=通道，列=采样点）
  * 成功 0，失败 -1 */
 int bin_read_frame_data(const char *path, int64_t idx, float *out_cs);
+
+/* 读第 idx 帧帧头里的日期/时间/纳秒，格式化成
+ * "2024-09-29 10:00:00.000" 写入 buf（>=32 字节）；成功 0，失败 -1 */
+int bin_read_time(const char *path, int64_t idx, string &buf);
 
 #endif // !BIN_READER_H

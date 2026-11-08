@@ -35,6 +35,15 @@ Kmax 表示阵列两端之间（阵元 1 到阵元 128）同一波前
 #define WORK_PERIOD_REAL_CNT (WORK_PERIOD_CNT+2*Kmax)
 //32采样点对齐（帧对齐）实际长度
 #define WORK_PERIOD_ALIGN_CNT (((WORK_PERIOD_REAL_CNT+FRM_NUM-1)/FRM_NUM)*FRM_NUM)
+
+
+
+
+#define FRAME_HDR_BYTES_FNON     12     /*帧头保留段1：date 之前的保留字节（readTime.m 用 fseek 12 跳过）*/
+#define FRAME_HDR_BYTES_ENON     (16*3) /*帧头后保留字节*/
+
+
+
 /**************************断言校验*************************/
 
 static_assert(sizeof(float) == 4, "float 必须是 4 字节");
