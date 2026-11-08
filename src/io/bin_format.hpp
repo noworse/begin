@@ -1,0 +1,56 @@
+#ifndef BIN_FORMAT_H
+#define BIN_FORMAT_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+/**************************固定数据宏定义*************************/
+#define FILE_HDR_BYTES      8       /* 每个文件开头的文件头 */
+#define FRAME_HDR_BYTES     72      /* 每帧的帧头 */
+#define CHAN_NUM            256     /* 阵列总通道数 */
+#define USE_CHAN_NUM        128     /* 实际只用前 128 个 */
+#define FRM_NUM             32      /* 每帧 32 个采样点 */
+#define FS                  32000   /*采样频率32000hz*/
+#define WORK_PERIOD         30      /*主动工作周期30s*/
+//一帧数据32 点 × 256 通道 × float32
+//每帧字节= 72 + 256×32×4
+#define FRAME_BYTES_MEASURED 32840L /*实测锚*/
+#define FRAME_BYTES          (FRAME_HDR_BYTES + CHAN_NUM*FRM_NUM*4)
+#define FRAME_BYTES_NOHEAD   (CHAN_NUM*FRM_NUM*4)
+//一工作周期采样点
+#define WORK_PERIOD_CNT     (WORK_PERIOD*FS)
+/*
+Kmax 表示阵列两端之间（阵元 1 到阵元 128）同一波前
+到达的时间差，换算成采样点数后再加 3 点余量
+ Kmax = 最大时延补偿点数
+ 阵列两端距离差 = 最后一个阵元X坐标 - 第一个 = 39.0m左右
+ 传播时间 = 距离差/声速，乘以采样率就是采样点数，再加3点余量
+ Kmax = round((ArrayXCord(128)-ArrayXCord(1))/C*fs) + 3;
+*/
+/* Kmax：38.10 m ÷ 1500 m/s × 32000 Hz = 812.8 → 813，+3 余量 */
+#define KMAX_DELAY_CNT       813
+#define KMAX_MARGIN          3
+#define Kmax                 (KMAX_DELAY_CNT + KMAX_MARGIN)
+//一工作周期实际长度
+#define WORK_PERIOD_REAL_CNT (WORK_PERIOD_CNT+2*Kmax)
+//32采样点对齐（帧对齐）实际长度
+#define WORK_PERIOD_ALIGN_CNT (((WORK_PERIOD_REAL_CNT+FRM_NUM-1)/FRM_NUM)*FRM_NUM)
+/**************************断言校验*************************/
+
+static_assert(sizeof(float) == 4, "float 必须是 4 字节");
+static_assert(FRAME_BYTES == FRAME_BYTES_MEASURED,   "推导值与实测锚 32840 不符");
+static_assert(WORK_PERIOD_CNT == 960000,             "一周期采样点应为 960000");
+static_assert(Kmax == 816,                           "Kmax 应与 Main_LFM_AR.m L68 的 816 一致");
+static_assert(WORK_PERIOD_REAL_CNT == 961632,        "一周期实际长度应为 961632");
+static_assert(WORK_PERIOD_ALIGN_CNT == 961632,       "帧对齐后应为 961632（961632 能被 32 整除）");
+
+/**************************数据接收结构体定义*************************/
+/* 72 字节帧头：先按裸字节收*/
+typedef struct 
+{
+    uint8_t raw[FRAME_HDR_BYTES];
+}frame_header_t;
+
+static_assert(sizeof(frame_header_t) == FRAME_HDR_BYTES, "帧头不能有 padding");
+
+#endif // !BIN_FORMAT_H

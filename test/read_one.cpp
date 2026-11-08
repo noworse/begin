@@ -1,0 +1,83 @@
+#include "bin_reader.hpp"
+
+using namespace std;
+#define FILE_PATH "/home/waster/data/sim/SIM_00001.bin"
+
+
+int main(int argc,char **argv)
+{
+    if(argc<2)
+    {
+        fprintf(stderr,"[WARN]:请指定测试命令:\n \
+            readframe:读取帧数\n \
+            frame_header:读取帧头 需要指明第几帧 \
+            例如：“frame_header 1” \n \
+            frame_data:读数据体 需要指明第几帧\n");
+            return -1;
+    }
+    int64_t ret;
+    string command_in(argv[1]);
+    if(command_in == "readframe") 
+    {
+        ret=bin_frame_count(FILE_PATH);
+        if(ret!=-1)
+        {
+            cout<<"共读到"<<ret<<"帧数据"<<endl;
+        }
+        else
+            return -1;
+    }
+    else if(argc != 3)
+    {
+        fprintf(stderr,"[WARN]:参数错误:\n \
+            frame_header:读取帧头 需要指明第几帧 \
+            例如：“frame_header 1” \n \
+            frame_data:读数据体 需要指明第几帧\n");
+        return -1;
+    }
+    /*
+    long long strtoll(const char *nptr, char **endptr, int base);
+    自动跳过开头空白 读到不是数字的字符就停止转换
+    溢出：超出 long long 范围,返回 LLONG_MAX /
+    LLONG_MIN，同时设置全局错误标志 errno
+    完全无法转换（字符串是 "abc"）：返回 0
+    */
+    else if (command_in == "frame_header")
+    {
+        int64_t idx = strtoll(argv[2], nullptr, 10);
+        uint8_t *data =(uint8_t*)malloc(72*sizeof(uint8_t));
+        ret=bin_read_frame_header(FILE_PATH,idx,data);
+        if(ret!=-1)
+        {
+            free(data);
+            cout<<"读取帧头成功"<<endl;
+        }
+        else
+        {
+            free(data);
+            cout<<"读取帧头失败"<<endl;
+            return -1;
+        }
+    }
+    else if (command_in == "frame_data")
+    {
+        int64_t idx = strtoll(argv[2], nullptr, 10);
+        float *data =(float*)malloc(CHAN_NUM*FRM_NUM*sizeof(float));
+        ret=bin_read_frame_data(FILE_PATH,idx,data);
+        if(ret!=-1)
+        {
+            free(data);
+            cout<<"读取帧数据成功"<<endl;
+        }
+        else
+        {
+            free(data);
+            cout<<"读取帧数据失败"<<endl;
+            return -1;
+        }
+    
+    }
+    else
+        cout<<"未知命令"<<endl;
+    return 0;
+}

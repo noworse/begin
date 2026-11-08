@@ -1,0 +1,146 @@
+#include "bin_reader.hpp"
+
+/**
+ * @brief 以二进制模式打开文件，校验打开结果
+ * @param fp 输出参数，文件句柄引用；打开成功后写入有效的FILE指针
+ * @param path 待读取的二进制文件路径
+ * @note 打开失败时自动打印错误信息到stderr
+ * @return true 文件打开成功；false 文件打开失败
+ */
+static bool fileop_check(FILE *&fp,const char *path)
+{
+    //以二进制打开
+    fp = fopen(path,"rb");
+    if (fp == nullptr)
+    {
+        // fopen失败时，会自动设置errno
+        fprintf(stderr, "[ERROR] fopen failed, path: %s, errno: %d, msg: %s\n",
+                path, errno, strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+
+/**
+ * @brief 读取bin文件大小，按单帧字节长度计算【完整帧】数量
+ * @param path 待读取的二进制文件路径
+ * @note 向下取整（截断）：不足一帧的尾部丢弃、不计入帧数，并打 WARN 提示字节数。
+ *       空文件或仅含 8 字节文件头时返回 0，不报错。
+ * @return 正常：完整帧数（int64）；失败：返回 -1（fopen/fseeko/ftello 错误）
+ */
+int64_t bin_frame_count(const char *path)
+{
+    FILE *fp = nullptr;
+    if(!fileop_check(fp,path))
+        return -1;
+    if(0>fseeko(fp,0,SEEK_END))
+    {
+        fprintf(stderr, "[ERROR] fseeko failed, path: %s, errno: %d, msg: %s\n",
+                path, errno, strerror(errno));
+        fclose(fp);
+        return -1;
+        
+    }
+    off_t file_bytes = ftello(fp);//ftello返回off_t,恒定8字节
+    if (0>file_bytes)
+    {
+        fprintf(stderr, "[ERROR] ftell failed, path: %s, errno: %d, msg: %s\n",
+                path, errno, strerror(errno));
+        fclose(fp);
+        return -1;
+    }
+    fclose(fp);
+    int64_t span = (int64_t)file_bytes - FILE_HDR_BYTES;
+    if (span > 0 && span % FRAME_BYTES != 0)
+    {
+        fprintf(stderr, "[WARN] %s 尾部有 %lld 字节不足一帧，已丢弃\n",
+                path, (long long)(span % FRAME_BYTES));
+    }
+    return span / FRAME_BYTES;
+}
+
+/**
+ * @brief 读取指定序号帧的帧头（72字节）
+ * @param path bin文件路径
+ * @param idx 帧序号，0起始
+ * @param out72 输出缓冲区，至少72字节空间
+ * @note 跳过文件全局头定位目标帧；半包帧头返回-1；IO错误返回-1
+ * @return 0 读取成功；-1 IO失败/半包
+ */
+int bin_read_frame_header(const char *path, int64_t idx, uint8_t *out72)
+{
+    FILE *fp = nullptr;
+    if(!fileop_check(fp,path))
+        return -1;
+    off_t idbytes = FILE_HDR_BYTES+(off_t)idx*FRAME_BYTES;
+    if(0>fseeko(fp,idbytes,SEEK_SET))
+    {
+        fprintf(stderr, "[ERROR] fseeko failed, path: %s, errno: %d, msg: %s\n",
+                path, errno, strerror(errno));
+        fclose(fp);
+        return -1;
+    }
+    size_t read_bytes = fread(out72,1,FRAME_HDR_BYTES,fp);
+    //读取帧头时，读到末尾的情况正常不会出现
+    if(read_bytes<FRAME_HDR_BYTES)
+    {
+        if(ferror(fp))
+        {
+            fprintf(stderr, "[ERROR] fread failed, path: %s, errno: %d, msg: %s\n",
+                path, errno, strerror(errno));
+            fclose(fp);
+            return -1;
+        }
+        else 
+        {
+            fclose(fp);
+            fprintf(stderr, "[WARN]剩余数据不足帧头72bytes，共读取%zu个字节\n",read_bytes);
+            return -1;  
+        }
+    }
+    fclose(fp);
+    return 0;
+}
+
+/**
+ * @brief 读取指定序号帧的数据部分
+ * @param path bin文件路径
+ * @param idx 帧序号，0起始
+ * @param out_cs 输出缓冲区，需容纳 CHAN_NUM*FRM_NUM 个 float（= 32768 字节）
+ * @note 跳过全局头、跳过目标帧的帧头，读取帧内采样数据；半包返回-1；IO错误返回-1
+ * @return 0 读取成功；-1 IO失败/半包
+ */
+int bin_read_frame_data(const char *path, int64_t idx, float *out_cs)
+{
+    FILE *fp = nullptr;
+    if(!fileop_check(fp,path))
+        return -1;
+    off_t idbytes = FILE_HDR_BYTES+(off_t)idx*FRAME_BYTES+FRAME_HDR_BYTES;
+    if(0>fseeko(fp,idbytes,SEEK_SET))
+    {
+        fprintf(stderr, "[ERROR] fseeko failed, path: %s, errno: %d, msg: %s\n",
+                path, errno, strerror(errno));
+        fclose(fp);
+        return -1;
+    }
+    size_t read_bytes = fread(out_cs,1,FRAME_BYTES_NOHEAD,fp);
+    if(read_bytes<FRAME_BYTES_NOHEAD)
+    {
+        if(ferror(fp))
+        {
+            fprintf(stderr, "[ERROR] fread failed, path: %s, errno: %d, msg: %s\n",
+                path, errno, strerror(errno));
+            fclose(fp);
+            return -1;
+        }
+        else 
+        {
+            fclose(fp);
+            fprintf(stderr, "[WARN]剩余数据不足一帧（256×32×4）bytes，共读取%zu个字节\n",read_bytes);
+            return -1;  
+        }
+    }
+    fclose(fp);
+    return 0;
+}
