@@ -279,6 +279,7 @@ int bin_find_start_frame(const char *path, int cycle_sec, FFFTimeAnchor &ffftime
     }
 
     ffftime.first_frame_idx = ideal_idx;
+    ffftime.first_Kmax_idx = ffftime.first_frame_idx - Kmax_OFFSET;
     ffftime.first_sec = (uint32_t)(first_sec_of_day + to_boundary_s);
     return 0;
 }
@@ -308,7 +309,7 @@ int bin_Kmax_start_frame(FFFTimeAnchor &ffftime)
 int bin_glob_frame(FFFTimeAnchor ffftime,vector<CycleAnchor>& cycle_anchor_list)
 {
     CycleAnchor cycle_anchor;
-    int64_t frame_count = 0;
+    int64_t frame_count = 0,count=0;
     int64_t fcount_diff,real_frame;
     char path_buf[256];
     cycle_anchor.file_id = FILE_START;
@@ -342,8 +343,8 @@ int bin_glob_frame(FFFTimeAnchor ffftime,vector<CycleAnchor>& cycle_anchor_list)
         for(int64_t fcount = 0;fcount<fcount_diff;fcount++)
         {
             cycle_anchor.file_id = file_id;
-            cycle_anchor.cycle_id = cycle_anchor_list[fcount].cycle_id+1;
-            cycle_anchor.global_frame = cycle_anchor_list[fcount].global_frame+WORK_FRAME_CNT;
+            cycle_anchor.cycle_id = cycle_anchor_list[count].cycle_id+1;
+            cycle_anchor.global_frame = cycle_anchor_list[count].global_frame+WORK_FRAME_CNT;
             cycle_anchor.global_kmax_frame = cycle_anchor.global_frame - Kmax_OFFSET;
             if(cycle_anchor_list.back().enable_frame_pad)
             {
@@ -351,10 +352,10 @@ int bin_glob_frame(FFFTimeAnchor ffftime,vector<CycleAnchor>& cycle_anchor_list)
             }
             else
             {
-                cycle_anchor.file_frame = cycle_anchor_list[fcount].file_frame+WORK_FRAME_CNT;
+                cycle_anchor.file_frame = cycle_anchor_list[count].file_frame+WORK_FRAME_CNT;
             }
             
-            if(frame_count - cycle_anchor_list[fcount].file_frame <= WORK_FRAME_CNT)
+            if(frame_count - cycle_anchor_list[count].file_frame <= WORK_FRAME_CNT)
             {
                 cycle_anchor.enable_frame_pad = true;
                 cycle_anchor.pad_frame_cnt =WORK_FRAME_CNT - (real_frame - cycle_anchor_list[fcount].file_frame);
@@ -363,7 +364,8 @@ int bin_glob_frame(FFFTimeAnchor ffftime,vector<CycleAnchor>& cycle_anchor_list)
                 cycle_anchor.enable_frame_pad = false;
             }
             cycle_anchor_list.emplace_back(cycle_anchor);
+            count++;
         }   
     }
-    return 0;
+    return count;
 }
