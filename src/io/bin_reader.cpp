@@ -339,7 +339,7 @@ int bin_glob_frame(FFFTimeAnchor ffftime,vector<CycleAnchor>& cycle_anchor_list)
             real_frame -= cycle_anchor_list.back().pad_frame_cnt;
 
         }
-        for(int64_t fcount = 0;fcount<fcount_diff;fcount+=WORK_FRAME_CNT)
+        for(int64_t fcount = 0;fcount<fcount_diff;fcount++)
         {
             cycle_anchor.file_id = file_id;
             cycle_anchor.cycle_id = cycle_anchor_list[fcount].cycle_id+1;
@@ -347,7 +347,7 @@ int bin_glob_frame(FFFTimeAnchor ffftime,vector<CycleAnchor>& cycle_anchor_list)
             cycle_anchor.global_kmax_frame = cycle_anchor.global_frame - Kmax_OFFSET;
             if(cycle_anchor_list.back().enable_frame_pad)
             {
-                cycle_anchor.file_frame = cycle_anchor_list.back().enable_frame_pad;
+                cycle_anchor.file_frame = cycle_anchor_list.back().pad_frame_cnt;
             }
             else
             {
@@ -365,4 +365,5 @@ int bin_glob_frame(FFFTimeAnchor ffftime,vector<CycleAnchor>& cycle_anchor_list)
             cycle_anchor_list.emplace_back(cycle_anchor);
         }   
     }
+    return 0;
 }
