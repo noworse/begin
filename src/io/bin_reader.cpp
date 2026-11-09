@@ -279,7 +279,6 @@ int bin_find_start_frame(const char *path, int cycle_sec, FFFTimeAnchor &ffftime
     }
 
     ffftime.first_frame_idx = ideal_idx;
-    ffftime.first_Kmax_idx = ffftime.first_frame_idx - Kmax_OFFSET;
     ffftime.first_sec = (uint32_t)(first_sec_of_day + to_boundary_s);
     return 0;
 }
@@ -292,8 +291,8 @@ int bin_find_start_frame(const char *path, int cycle_sec, FFFTimeAnchor &ffftime
  */
 int bin_Kmax_start_frame(FFFTimeAnchor &ffftime)
 {
-    const int64_t kmax_offset = Kmax / FRM_NUM;   // 816/32 = 25，等价于 ceil(-25.5)
-    ffftime.first_Kmax_idx -= kmax_offset;
+
+    ffftime.first_Kmax_idx -= Kmax_OFFSET;
 
     if (ffftime.first_Kmax_idx < 0)
     {
@@ -358,7 +357,7 @@ int bin_glob_frame(FFFTimeAnchor ffftime,vector<CycleAnchor>& cycle_anchor_list)
             if(frame_count - cycle_anchor_list[count].file_frame <= WORK_FRAME_CNT)
             {
                 cycle_anchor.enable_frame_pad = true;
-                cycle_anchor.pad_frame_cnt =WORK_FRAME_CNT - (real_frame - cycle_anchor_list[fcount].file_frame);
+                cycle_anchor.pad_frame_cnt =WORK_FRAME_CNT - (real_frame - cycle_anchor_list[count].file_frame);
             }
             else {
                 cycle_anchor.enable_frame_pad = false;
@@ -369,3 +368,4 @@ int bin_glob_frame(FFFTimeAnchor ffftime,vector<CycleAnchor>& cycle_anchor_list)
     }
     return count;
 }
+
