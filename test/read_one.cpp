@@ -11,6 +11,7 @@ int main(int argc,char **argv)
         fprintf(stderr,"[WARN]:请指定测试命令:\n \
             readframe:读取帧数\n \
             frame_cycle:查找起始帧全局序号\n \
+            cycles:打印全部周期起点与时刻\n \
             frame_header:读取帧头 需要指明第几帧 \
             例如：“frame_header 1” \n \
             frame_data:读数据体 需要指明第几帧\n \
@@ -48,6 +49,76 @@ int main(int argc,char **argv)
             cout<<"读取首帧时间，索引失败"<<endl;
             return -1;
         }
+    }
+    else if(command_in == "cycles")
+    {
+        // 1) 首周期理想起点（未扣 Kmax）
+        FFFTimeAnchor ffftime{};
+        if(bin_find_start_frame(path_buf,WORK_PERIOD,ffftime) != 0)
+        {
+            cout<<"首周期定位失败"<<endl;
+            return -1;
+        }
+        // 2) 扣掉 Kmax 保护带，得到实际读起点
+        int kmax_ret = bin_Kmax_start_frame(ffftime);
+        if(kmax_ret < 0)
+        {
+            cout<<"Kmax 回退失败"<<endl;
+            return -1;
+        }
+        if(kmax_ret > 0)
+            cout<<"[提示] 首文件开头保护带不足，已钳到第 0 帧"<<endl;
+
+        // 3) 推算全部周期
+        vector<CycleAnchor> list;
+        int ncycle = bin_glob_frame(ffftime,list);
+        if(ncycle < 0)
+        {
+            cout<<"全局索引推算失败"<<endl;
+            return -1;
+        }
+
+        // 4) 独立统计总帧数，用于判定每个周期是否读得满
+        int64_t total_frames = 0;
+        for(int f = FILE_START; f <= FILE_END; ++f)
+        {
+            char p[256];
+            snprintf(p,sizeof(p),FILE_PATH,f);
+            int64_t n = bin_frame_count(p);
+            if(n < 0)
+                return -1;
+            total_frames += n;
+        }
+        const int64_t period_frames = WORK_PERIOD_ALIGN_CNT / FRM_NUM;   // 30051
+
+        printf("%-4s %-10s %-11s %-11s %-11s %-24s %s\n",
+               "cyc","file","file_frame","global","kmax","start_time","fit");
+        for(size_t i = 0; i < list.size(); ++i)
+        {
+            const CycleAnchor &c = list[i];
+            char p[256];
+            snprintf(p,sizeof(p),FILE_PATH,c.file_id);
+
+            // 实际读起点在本文件内的帧号（首周期被钳位时为 0）
+            int64_t kmax_local = c.file_frame - Kmax_OFFSET;
+            if(kmax_local < 0)
+                kmax_local = 0;
+
+            string ts;
+            if(bin_read_time(p,kmax_local,ts) != 0)
+                ts = "<读取失败>";
+
+            bool fit = (c.global_kmax_frame + period_frames <= total_frames);
+            printf("%-4d SIM_%05d  %-11lld %-11lld %-11lld %-24s %s\n",
+                   c.cycle_id, c.file_id,
+                   (long long)c.file_frame,
+                   (long long)c.global_frame,
+                   (long long)c.global_kmax_frame,
+                   ts.c_str(),
+                   fit ? "ok" : "越界");
+        }
+        cout<<"共 "<<list.size()<<" 个周期，总帧数 "<<total_frames
+            <<"，每周期需 "<<period_frames<<" 帧"<<endl;
     }
     else if(argc != 3)
     {

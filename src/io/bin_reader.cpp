@@ -292,7 +292,7 @@ int bin_find_start_frame(const char *path, int cycle_sec, FFFTimeAnchor &ffftime
 int bin_Kmax_start_frame(FFFTimeAnchor &ffftime)
 {
 
-    ffftime.first_Kmax_idx -= Kmax_OFFSET;
+    ffftime.first_Kmax_idx = ffftime.first_frame_idx-Kmax_OFFSET;
 
     if (ffftime.first_Kmax_idx < 0)
     {
@@ -305,67 +305,91 @@ int bin_Kmax_start_frame(FFFTimeAnchor &ffftime)
     return 0;
 }
 
-int bin_glob_frame(FFFTimeAnchor ffftime,vector<CycleAnchor>& cycle_anchor_list)
+/**
+ * @brief 由首周期锚点（已扣 Kmax）推算全部周期起点，依次追加到 cycle_anchor_list
+ * @param anchor 首周期锚点；first_frame_idx 未扣 Kmax，first_Kmax_idx 已扣 Kmax
+ * @param cycle_anchor_list 输出表，调用方传入空 vector
+ * @return 成功：周期总数；失败：-1
+ * @note 步进固定 = WORK_FRAME_CNT（30000 帧 = 30 s），窗口长度 = 30051 帧
+ * @note 跨文件依靠 pad 衔接：本文件剩余帧不足一个步进时，下一周期起点 = 下一文件第 (WORK_FRAME_CNT - 本文件剩余) 帧
+ * @note 起点 + 30051 超过数据总帧数的周期直接丢弃，末周期读不满，和 MATLAB 逻辑对齐
+ */
+int bin_glob_frame(FFFTimeAnchor anchor, vector<CycleAnchor> &cycle_anchor_list)
 {
-    CycleAnchor cycle_anchor;
-    int64_t frame_count = 0,count=0;
-    int64_t fcount_diff,real_frame;
-    char path_buf[256];
-    cycle_anchor.file_id = FILE_START;
-    cycle_anchor.cycle_id = 1;
-    cycle_anchor.file_frame = ffftime.first_frame_idx;
-    cycle_anchor.global_frame = ffftime.first_frame_idx;
-    cycle_anchor.global_kmax_frame = ffftime.first_Kmax_idx;
-    cycle_anchor.enable_frame_pad = false;
-    cycle_anchor_list.emplace_back(cycle_anchor);
-    for(int file_id =FILE_START;file_id<=FILE_END;file_id++)
+    const int64_t period_frames = WORK_PERIOD_ALIGN_CNT / FRM_NUM;   /* 一周期帧数 = 30051 */
+    const int     nfiles        = FILE_END - FILE_START + 1;
+
+    /* 先把每个文件的帧数读一遍：既得到总帧数，也避免后面循环里重复 stat */
+    vector<int64_t> fcnt(nfiles, 0);
+    int64_t total_frames = 0;
+    for (int i = 0; i < nfiles; ++i)
     {
-        if(!Check(snprintf(path_buf,sizeof(path_buf),FILE_PATH,file_id)))
+        char path_buf[256];
+        if (!Check(snprintf(path_buf, sizeof(path_buf), FILE_PATH, FILE_START + i)))
             return -1;
-        if(!Check(frame_count = bin_frame_count(path_buf)))
+        if (!Check(fcnt[i] = bin_frame_count(path_buf)))
             return -1;
-        if(file_id == FILE_START)
-        {
-            fcount_diff = ((frame_count-ffftime.first_frame_idx+WORK_FRAME_CNT - 1)/WORK_FRAME_CNT);
-            real_frame = frame_count-ffftime.first_frame_idx;
-        }
-        else{
-            fcount_diff = ((frame_count+WORK_FRAME_CNT - 1)/WORK_FRAME_CNT);
-            real_frame  = frame_count;
-        }
-        
-        if(cycle_anchor_list.back().enable_frame_pad)
-        {
-            real_frame -= cycle_anchor_list.back().pad_frame_cnt;
-
-        }
-        for(int64_t fcount = 0;fcount<fcount_diff;fcount++)
-        {
-            cycle_anchor.file_id = file_id;
-            cycle_anchor.cycle_id = cycle_anchor_list[count].cycle_id+1;
-            cycle_anchor.global_frame = cycle_anchor_list[count].global_frame+WORK_FRAME_CNT;
-            cycle_anchor.global_kmax_frame = cycle_anchor.global_frame - Kmax_OFFSET;
-            if(cycle_anchor_list.back().enable_frame_pad)
-            {
-                cycle_anchor.file_frame = cycle_anchor_list.back().pad_frame_cnt;
-            }
-            else
-            {
-                cycle_anchor.file_frame = cycle_anchor_list[count].file_frame+WORK_FRAME_CNT;
-            }
-            
-            if(frame_count - cycle_anchor_list[count].file_frame <= WORK_FRAME_CNT)
-            {
-                cycle_anchor.enable_frame_pad = true;
-                cycle_anchor.pad_frame_cnt =WORK_FRAME_CNT - (real_frame - cycle_anchor_list[count].file_frame);
-            }
-            else {
-                cycle_anchor.enable_frame_pad = false;
-            }
-            cycle_anchor_list.emplace_back(cycle_anchor);
-            count++;
-        }   
+        total_frames += fcnt[i];
     }
-    return count;
-}
 
+    /* 连首周期都读不满，直接失败 */
+    if (anchor.first_Kmax_idx + period_frames > total_frames)
+    {
+        fprintf(stderr, "[ERROR] 数据不足一个周期：需要 %lld 帧，实际 %lld 帧\n",
+                (long long)period_frames, (long long)total_frames);
+        return -1;
+    }
+
+    /* 首周期：直接由锚点生成 */
+    CycleAnchor first{};
+    first.cycle_id          = 1;
+    first.file_id           = FILE_START;
+    first.file_frame        = anchor.first_frame_idx;
+    first.global_frame      = anchor.first_frame_idx;
+    first.global_kmax_frame = anchor.first_Kmax_idx;
+    first.enable_frame_pad  = false;
+    first.pad_frame_cnt     = 0;
+    cycle_anchor_list.emplace_back(first);
+
+    for (int i = 0; i < nfiles; ++i)
+    {
+        const int     file_id     = FILE_START + i;
+        const int64_t frame_count = fcnt[i];
+
+        /* 本文件内第一个待生成周期的帧号：
+         *   上一周期标了 pad（本文件不够步进）→ 用 pad 给出的落点
+         *   否则沿上一周期再走一个步进 */
+        int64_t next_frame = cycle_anchor_list.back().enable_frame_pad
+                             ? cycle_anchor_list.back().pad_frame_cnt
+                             : cycle_anchor_list.back().file_frame + WORK_FRAME_CNT;
+
+        while (next_frame < frame_count)
+        {
+            const int64_t next_global = cycle_anchor_list.back().global_frame + WORK_FRAME_CNT;
+
+            /* 这一周期要从 next_global-25 起读满 30051 帧，数据不够就到此为止 */
+            if (next_global - Kmax_OFFSET + period_frames > total_frames)
+                return static_cast<int>(cycle_anchor_list.size());
+
+            CycleAnchor cur{};
+            cur.cycle_id          = cycle_anchor_list.back().cycle_id + 1;
+            cur.global_frame      = next_global;
+            cur.global_kmax_frame = next_global - Kmax_OFFSET;
+            cur.file_id           = file_id;
+            cur.file_frame        = next_frame;
+
+            /* 本文件剩下的帧不足一个步进 → 下一个周期落到下一文件 */
+            const int64_t left = frame_count - next_frame;
+            if (left < WORK_FRAME_CNT)
+            {
+                cur.enable_frame_pad = true;
+                cur.pad_frame_cnt    = WORK_FRAME_CNT - left;
+            }
+
+            cycle_anchor_list.emplace_back(cur);
+            next_frame += WORK_FRAME_CNT;
+        }
+    }
+
+    return static_cast<int>(cycle_anchor_list.size());
+}

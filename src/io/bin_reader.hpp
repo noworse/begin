@@ -2,6 +2,7 @@
 #define BIN_READER_H
 
 #include "bin_format.hpp"
+#include <vector>
 
 
 using namespace std;
@@ -32,5 +33,10 @@ int bin_find_start_frame(const char *path,  int cycle_sec,FFFTimeAnchor& ffftime
 
 //首帧中加入最大时延补偿点数
 int bin_Kmax_start_frame(FFFTimeAnchor& ffftime);
+
+/* 由首周期锚点推算出全部周期起点，依次追加到 cycle_anchor_list。
+ * 返回推算出的周期个数；失败 -1。
+ * 注意：本函数不校验“起点 + 30051 是否超出数据总量”，由调用方判定。 */
+int bin_glob_frame(FFFTimeAnchor ffftime, vector<CycleAnchor> &cycle_anchor_list);
 
 #endif // !BIN_READER_H
