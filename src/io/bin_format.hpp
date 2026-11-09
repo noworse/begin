@@ -66,7 +66,7 @@ Kmax 表示阵列两端之间（阵元 1 到阵元 128）同一波前
 #define FILE_PATH "/home/waster/data/sim/SIM_%05d.bin"
 #define DATATIME_EXAMPLE "2024-09-29 10:00:00.000"
 #define FILE_START 1
-#define FILE_END   1
+#define FILE_END   6
 
 //推算首周期
 struct FFFTimeAnchor//CPP风格不使用typdef
