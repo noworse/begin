@@ -210,3 +210,63 @@ int bin_read_time(const char *path, int64_t idx, string& buf)
  
     return 0;
 }
+
+
+
+/**
+ * @brief 读取首文件0号帧时间戳，计算未扣除Kmax的周期理想起点帧号
+ * @param path 首bin文件完整路径
+ * @param cycle_sec 周期长度(秒)，传入 WORK_PERIOD
+ * @param ffftime 输出时间锚点结构体
+ * @param ffftime.first_frame_idx 理想起点帧号，文件内0基，未扣Kmax
+ * @param ffftime.first_sec 周期名义起点，当日累计秒，跨天持续累加
+ * @note 判定语义：严格大于；首帧秒刚好对齐周期刻度时，自动取下一个刻度
+ * @note 对齐MATLAB Main_LFM_AR.m L292-L295逻辑：temp1 = segLen - mod(SS,segLen)
+ * @note Kmax回退、最终取整逻辑交由外部函数处理，本函数仅输出理想值
+ * @return 0 成功；-1 失败（参数非法/读时间失败/时间解析失败/起点帧越界）
+ * @example bin_find_start_frame("/home/waster/data/sim/SIM_00001.bin", WORK_PERIOD, anchor);
+ */
+int bin_find_start_frame(const char *path, int cycle_sec, FFFTimeAnchor &ffftime)
+{
+    if (cycle_sec <= 0)
+    {
+        fprintf(stderr, "[ERROR] cycle_sec 必须为正，当前 %d\n", cycle_sec);
+        return -1;
+    }
+
+    string ff_time;
+    if (bin_read_time(path, 0, ff_time) != 0)
+        return -1;
+
+    int hour = 0, min = 0, sec = 0, msec = 0;
+    if (sscanf(ff_time.c_str(), "%*[^ ] %02d:%02d:%02d.%03d",
+               &hour, &min, &sec, &msec) != 4)
+    {
+        fprintf(stderr, "[ERROR] 首帧时间格式无法解析：%s\n", ff_time.c_str());
+        return -1;
+    }
+
+    /* 首帧整数秒：周期刻度必落在整秒上，毫秒只影响帧号，不影响刻度 */
+    const int64_t first_sec_of_day = (int64_t)hour * 3600 + min * 60 + sec;
+
+    /* 严格大于语义：sec % cycle_sec == 0 时，to_boundary_s 仍等于 cycle_sec */
+    const int64_t to_boundary_s = cycle_sec - (sec % cycle_sec);
+
+    /* 到下一个刻度的毫秒数，再按 FRAME_MS（=1 ms）折算成帧号 */
+    const int64_t dist_ms = to_boundary_s * 1000 - msec;
+    const int64_t ideal_idx = (dist_ms + FRAME_MS - 1) / FRAME_MS;   /* 向上取整 */
+
+    const int64_t binFrm = bin_frame_count(path);
+    if (binFrm < 0)
+        return -1;
+    if (ideal_idx >= binFrm)
+    {
+        fprintf(stderr, "[ERROR] 起点越界：需要第 %lld 帧，文件仅 %lld 帧\n",
+                (long long)ideal_idx, (long long)binFrm);
+        return -1;
+    }
+
+    ffftime.first_frame_idx = ideal_idx;
+    ffftime.first_sec = (uint32_t)(first_sec_of_day + to_boundary_s);
+    return 0;
+}

@@ -19,6 +19,9 @@
 #define FRAME_BYTES_NOHEAD   (CHAN_NUM*FRM_NUM*4)
 //一工作周期采样点
 #define WORK_PERIOD_CNT     (WORK_PERIOD*FS)
+//一帧的时长（毫秒）：FRM_NUM/FS = 32/32000 = 1 ms
+//“帧号 <-> 时间”按 1:1 换算，换采样率后必须仍整除，否则下方断言会拦住
+#define FRAME_MS            ((1000*FRM_NUM)/FS)
 /*
 Kmax 表示阵列两端之间（阵元 1 到阵元 128）同一波前
 到达的时间差，换算成采样点数后再加 3 点余量
@@ -43,12 +46,28 @@ Kmax 表示阵列两端之间（阵元 1 到阵元 128）同一波前
 #define FRAME_HDR_BYTES_ENON     (16*3) /*帧头后保留字节*/
 
 
+//格式定义
+#define FILE_PATH "/home/waster/data/sim/SIM_%05d.bin"
+#define DATATIME_EXAMPLE "2024-09-29 10:00:00.000"
+#define FILE_START 1
+#define FILE_END   1
+
+struct FFFTimeAnchor//CPP风格不使用typdef
+{
+    int64_t first_frame_idx;    // 理想起点帧号（文件内 0-based，未扣 Kmax）
+    uint32_t first_sec;         // 周期名义起点（当日累计秒）
+
+};
+
+
 
 /**************************断言校验*************************/
 
 static_assert(sizeof(float) == 4, "float 必须是 4 字节");
 static_assert(FRAME_BYTES == FRAME_BYTES_MEASURED,   "推导值与实测锚 32840 不符");
 static_assert(WORK_PERIOD_CNT == 960000,             "一周期采样点应为 960000");
+static_assert((1000*FRM_NUM) % FS == 0,              "一帧不是整数毫秒，帧号不能当毫秒用");
+static_assert(FRAME_MS == 1,                         "一帧应为 1 ms（32 点 / 32000 Hz）");
 static_assert(Kmax == 816,                           "Kmax 应与 Main_LFM_AR.m L68 的 816 一致");
 static_assert(WORK_PERIOD_REAL_CNT == 961632,        "一周期实际长度应为 961632");
 static_assert(WORK_PERIOD_ALIGN_CNT == 961632,       "帧对齐后应为 961632（961632 能被 32 整除）");
