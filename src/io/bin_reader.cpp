@@ -21,6 +21,18 @@ static bool fileop_check(FILE *&fp,const char *path)
     return true;
 }
 
+bool err_check(int err,const char* filename, int lineNumber)
+{
+    if(err < 0)
+    {
+        printf("error:\nfile=%s,line=%d\n",
+            filename,
+            lineNumber);
+            return false;
+    }
+    return true;
+}
+
 
 /**
  * @brief 读取bin文件大小，按单帧字节长度计算【完整帧】数量
@@ -269,4 +281,88 @@ int bin_find_start_frame(const char *path, int cycle_sec, FFFTimeAnchor &ffftime
     ffftime.first_frame_idx = ideal_idx;
     ffftime.first_sec = (uint32_t)(first_sec_of_day + to_boundary_s);
     return 0;
+}
+
+/**
+ * @brief 基于Kmax向前回退起点帧索引，修正时间锚点
+ * @param ffftime 输入输出：时间锚点结构体，first_frame_idx 会被向前偏移
+ * @note 回退量 = Kmax / FRM_NUM；注意首文件开头不足一个回退量,钳到第0帧
+ * @return 0 成功
+ */
+int bin_Kmax_start_frame(FFFTimeAnchor &ffftime)
+{
+    const int64_t kmax_offset = Kmax / FRM_NUM;   // 816/32 = 25，等价于 ceil(-25.5)
+    ffftime.first_Kmax_idx -= kmax_offset;
+
+    if (ffftime.first_Kmax_idx < 0)
+    {
+        // 首文件开头不足一个回退量：MATLAB 的 find 会落到第 1 帧，这里同样钳到 0 帧
+        ffftime.first_Kmax_idx = 0;
+        fprintf(stderr, "[WARN] 首文件开头不足 %lld ms 保护带，已钳到第 0 帧\n",
+                (long long)(Kmax * 1000 / FS));
+        return 1;      // 0 = 正常回退；1 = 保护带不足已钳位
+    }
+    return 0;
+}
+
+int bin_glob_frame(FFFTimeAnchor ffftime,vector<CycleAnchor>& cycle_anchor_list)
+{
+    CycleAnchor cycle_anchor;
+    int64_t frame_count = 0;
+    int64_t fcount_diff,real_frame;
+    char path_buf[256];
+    cycle_anchor.file_id = FILE_START;
+    cycle_anchor.cycle_id = 1;
+    cycle_anchor.file_frame = ffftime.first_frame_idx;
+    cycle_anchor.global_frame = ffftime.first_frame_idx;
+    cycle_anchor.global_kmax_frame = ffftime.first_Kmax_idx;
+    cycle_anchor.enable_frame_pad = false;
+    cycle_anchor_list.emplace_back(cycle_anchor);
+    for(int file_id =FILE_START;file_id<=FILE_END;file_id++)
+    {
+        if(!Check(snprintf(path_buf,sizeof(path_buf),FILE_PATH,file_id)))
+            return -1;
+        if(!Check(frame_count = bin_frame_count(path_buf)))
+            return -1;
+        if(file_id == FILE_START)
+        {
+            fcount_diff = ((frame_count-ffftime.first_frame_idx+WORK_FRAME_CNT - 1)/WORK_FRAME_CNT);
+            real_frame = frame_count-ffftime.first_frame_idx;
+        }
+        else{
+            fcount_diff = ((frame_count+WORK_FRAME_CNT - 1)/WORK_FRAME_CNT);
+            real_frame  = frame_count;
+        }
+        
+        if(cycle_anchor_list.back().enable_frame_pad)
+        {
+            real_frame -= cycle_anchor_list.back().pad_frame_cnt;
+
+        }
+        for(int64_t fcount = 0;fcount<fcount_diff;fcount+=WORK_FRAME_CNT)
+        {
+            cycle_anchor.file_id = file_id;
+            cycle_anchor.cycle_id = cycle_anchor_list[fcount].cycle_id+1;
+            cycle_anchor.global_frame = cycle_anchor_list[fcount].global_frame+WORK_FRAME_CNT;
+            cycle_anchor.global_kmax_frame = cycle_anchor.global_frame - Kmax_OFFSET;
+            if(cycle_anchor_list.back().enable_frame_pad)
+            {
+                cycle_anchor.file_frame = cycle_anchor_list.back().enable_frame_pad;
+            }
+            else
+            {
+                cycle_anchor.file_frame = cycle_anchor_list[fcount].file_frame+WORK_FRAME_CNT;
+            }
+            
+            if(frame_count - cycle_anchor_list[fcount].file_frame <= WORK_FRAME_CNT)
+            {
+                cycle_anchor.enable_frame_pad = true;
+                cycle_anchor.pad_frame_cnt =WORK_FRAME_CNT - (real_frame - cycle_anchor_list[fcount].file_frame);
+            }
+            else {
+                cycle_anchor.enable_frame_pad = false;
+            }
+            cycle_anchor_list.emplace_back(cycle_anchor);
+        }   
+    }
 }

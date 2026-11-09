@@ -3,7 +3,19 @@
 
 #include <stdint.h>
 #include <stddef.h>
-
+#include "function.hpp"
+#include <cstdint>
+#include <stdio.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdbool.h>
+#include <sys/types.h>
+#include <string>
+#include <iostream>
+#include <cmath>
+#include <vector>
 /**************************固定数据宏定义*************************/
 #define FILE_HDR_BYTES      8       /* 每个文件开头的文件头 */
 #define FRAME_HDR_BYTES     72      /* 每帧的帧头 */
@@ -17,8 +29,10 @@
 #define FRAME_BYTES_MEASURED 32840L /*实测锚*/
 #define FRAME_BYTES          (FRAME_HDR_BYTES + CHAN_NUM*FRM_NUM*4)
 #define FRAME_BYTES_NOHEAD   (CHAN_NUM*FRM_NUM*4)
-//一工作周期采样点
+//一工作周期理想采样点
 #define WORK_PERIOD_CNT     (WORK_PERIOD*FS)
+//一工作周期理想帧数
+#define WORK_FRAME_CNT     ((WORK_PERIOD*FS)/FRM_NUM)
 //一帧的时长（毫秒）：FRM_NUM/FS = 32/32000 = 1 ms
 //“帧号 <-> 时间”按 1:1 换算，换采样率后必须仍整除，否则下方断言会拦住
 #define FRAME_MS            ((1000*FRM_NUM)/FS)
@@ -34,11 +48,13 @@ Kmax 表示阵列两端之间（阵元 1 到阵元 128）同一波前
 #define KMAX_DELAY_CNT       813
 #define KMAX_MARGIN          3
 #define Kmax                 (KMAX_DELAY_CNT + KMAX_MARGIN)
+#define Kmax_OFFSET          (Kmax/FRM_NUM)
 //一工作周期实际长度
 #define WORK_PERIOD_REAL_CNT (WORK_PERIOD_CNT+2*Kmax)
-//32采样点对齐（帧对齐）实际长度
+//32采样点对齐（帧对齐）实际长度,断言用
 #define WORK_PERIOD_ALIGN_CNT (((WORK_PERIOD_REAL_CNT+FRM_NUM-1)/FRM_NUM)*FRM_NUM)
-
+//一工作周期的帧数（= 961632/32 = 30051），读 bin 时的帧循环上限
+#define WORK_PERIOD_FRM_CNT  (WORK_PERIOD_ALIGN_CNT / FRM_NUM)
 
 
 
@@ -52,13 +68,26 @@ Kmax 表示阵列两端之间（阵元 1 到阵元 128）同一波前
 #define FILE_START 1
 #define FILE_END   1
 
+//推算首周期
 struct FFFTimeAnchor//CPP风格不使用typdef
 {
     int64_t first_frame_idx;    // 理想起点帧号（文件内 0-based，未扣 Kmax）
+    int64_t first_Kmax_idx;    // Kmax起点帧号
     uint32_t first_sec;         // 周期名义起点（当日累计秒）
 
 };
 
+/* 一周期在全局帧轴上的定位结果 */
+struct CycleAnchor
+{
+    int     cycle_id;         // 周期号，1-based
+    int64_t global_frame;     // 起点理想全局帧号，0-based
+    int64_t global_kmax_frame;// 起点全局帧号，0-based，已扣 Kmax ★唯一真值
+    int     file_id;          // 起点所在文件，1-based（= 文件名里的编号）
+    int64_t file_frame;       // 起点在文件内的帧号，0-based（派生量）
+    bool    enable_frame_pad; //是否需要补帧
+    int64_t pad_frame_cnt;    ///< 补帧数量，==仅 enable_frame_pad 为true时有效==
+};
 
 
 /**************************断言校验*************************/

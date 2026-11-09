@@ -2,20 +2,13 @@
 #define BIN_READER_H
 
 #include "bin_format.hpp"
-#include "function.hpp"
-#include <cstdint>
-#include <stdio.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <string.h>
-#include <stdbool.h>
-#include <sys/types.h>
-#include <string>
-#include <iostream>
-#include <cmath>
+
 
 using namespace std;
+
+#define Check(err) err_check(err,__FILE__,__LINE__)
+
+bool err_check(int err,const char* filename, int lineNumber);
 
 /* 返回帧数；失败返回 -1 */
 int64_t bin_frame_count(const char *path);
@@ -37,5 +30,7 @@ int bin_read_time(const char *path, int64_t idx, string &buf);
  * 成功 0，失败 -1 */
 int bin_find_start_frame(const char *path,  int cycle_sec,FFFTimeAnchor& ffftime);
 
+//首帧中加入最大时延补偿点数
+int bin_Kmax_start_frame(FFFTimeAnchor& ffftime);
 
 #endif // !BIN_READER_H
