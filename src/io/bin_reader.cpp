@@ -1,4 +1,18 @@
+/******************************************************************************
+ * 文件：bin_reader.cpp
+ * 作用：bin 文件的读取、时间戳解析、周期起点定位。
+ * 分区：
+ *   一、内部工具     fileop_check / err_check
+ *   二、基础读取     帧数、帧头、帧数据体
+ *   三、时间戳解析   帧头 date/time/ns → 字符串
+ *   四、周期定位     理想起点 → 扣 Kmax → 全部周期
+ *   五、全局周期推算 首周期 → 跨文件推算全部周期
+ * 约定：帧号一律 0-based；失败统一返回 -1（错误信息写 stderr）。
+ ******************************************************************************/
+
 #include "bin_reader.hpp"
+
+/**************************一、内部工具*************************/
 
 /**
  * @brief 以二进制模式打开文件，校验打开结果
@@ -21,6 +35,14 @@ static bool fileop_check(FILE *&fp,const char *path)
     return true;
 }
 
+/**
+ * @brief 统一错误检查：err < 0 判为失败，并打印出错的文件名与行号
+ * @param err 被检查的返回值（约定负数代表失败）
+ * @param filename 出错文件名（由 Check 宏用 __FILE__ 自动填入）
+ * @param lineNumber 出错行号（由 Check 宏用 __LINE__ 自动填入）
+ * @return true 没有出错；false 出错
+ * @note 标准用法：if(!Check(调用)) return -1;
+ */
 bool err_check(int err,const char* filename, int lineNumber)
 {
     if(err < 0)
@@ -33,6 +55,8 @@ bool err_check(int err,const char* filename, int lineNumber)
     return true;
 }
 
+
+/**************************二、基础读取*************************/
 
 /**
  * @brief 读取bin文件大小，按单帧字节长度计算【完整帧】数量
@@ -158,6 +182,19 @@ int bin_read_frame_data(const char *path, int64_t idx, float *out_cs)
 }
 
 
+/**************************三、时间戳解析*************************/
+
+/*
+ * 函数名：bin_read_time
+ * 描述  ：读第 idx 帧帧头里的 date/time/ns，格式化成 "YYYY-MM-DD HH:MM:SS.mmm"
+ * 输入  ：- path bin 文件路径
+ *         - idx  帧号，0-based
+ * 输出  ：- buf  格式化结果写入此处（固定 23 字符，另加结尾 '\0'）
+ * 返回  ：0 成功；-1 失败（打不开 / 定位失败 / 帧头读不满 12 字节）
+ * 调用  ：bin_read_time(path, 0, s);
+ * 说明  ：date/time 是 BCD 打包数，解码交给 bcd_date_to_integer；
+ *         ns 只取毫秒部分，输出格式与宏 DATATIME_EXAMPLE 一一对应
+ */
 int bin_read_time(const char *path, int64_t idx, string& buf)
 {
     FILE *fp = nullptr;
@@ -224,6 +261,8 @@ int bin_read_time(const char *path, int64_t idx, string& buf)
 }
 
 
+
+/**************************四、周期定位*************************/
 
 /**
  * @brief 读取首文件0号帧时间戳，计算未扣除Kmax的周期理想起点帧号
@@ -305,6 +344,8 @@ int bin_Kmax_start_frame(FFFTimeAnchor &ffftime)
     return 0;
 }
 
+/**************************五、全局周期推算*************************/
+
 /**
  * @brief 由首周期锚点（已扣 Kmax）推算全部周期起点，依次追加到 cycle_anchor_list
  * @param anchor 首周期锚点；first_frame_idx 未扣 Kmax，first_Kmax_idx 已扣 Kmax
@@ -345,6 +386,7 @@ int bin_glob_frame(FFFTimeAnchor anchor, vector<CycleAnchor> &cycle_anchor_list)
     first.cycle_id          = 1;
     first.file_id           = FILE_START;
     first.file_frame        = anchor.first_frame_idx;
+    first.file_kmax_frame   = anchor.first_Kmax_idx;
     first.global_frame      = anchor.first_frame_idx;
     first.global_kmax_frame = anchor.first_Kmax_idx;
     first.enable_frame_pad  = false;
@@ -355,6 +397,18 @@ int bin_glob_frame(FFFTimeAnchor anchor, vector<CycleAnchor> &cycle_anchor_list)
     {
         const int     file_id     = FILE_START + i;
         const int64_t frame_count = fcnt[i];
+
+        /* 数据断裂检查：上一周期要求本文件从 pad 处接上，但本文件没这么长，
+         * 说明数据中间缺了一段，继续算会把周期错位，直接报错 */
+        if (cycle_anchor_list.back().enable_frame_pad &&
+            cycle_anchor_list.back().pad_frame_cnt >= frame_count)
+        {
+            fprintf(stderr,
+                    "[ERROR] 文件 %d 只有 %lld 帧，不足以衔接上一周期（需从第 %lld 帧起）\n",
+                    file_id, (long long)frame_count,
+                    (long long)cycle_anchor_list.back().pad_frame_cnt);
+            return -1;
+        }
 
         /* 本文件内第一个待生成周期的帧号：
          *   上一周期标了 pad（本文件不够步进）→ 用 pad 给出的落点
@@ -378,6 +432,12 @@ int bin_glob_frame(FFFTimeAnchor anchor, vector<CycleAnchor> &cycle_anchor_list)
             cur.file_id           = file_id;
             cur.file_frame        = next_frame;
 
+            /* 本文件内的实际读起点：再往前退 Kmax_OFFSET，退成负数就钳到 0
+             * （首周期在 bin_Kmax_start_frame 里已钳过，这里只兜后面的边界） */
+            cur.file_kmax_frame = next_frame - Kmax_OFFSET;
+            if (cur.file_kmax_frame < 0)
+                cur.file_kmax_frame = 0;
+
             /* 本文件剩下的帧不足一个步进 → 下一个周期落到下一文件 */
             const int64_t left = frame_count - next_frame;
             if (left < WORK_FRAME_CNT)
@@ -392,4 +452,163 @@ int bin_glob_frame(FFFTimeAnchor anchor, vector<CycleAnchor> &cycle_anchor_list)
     }
 
     return static_cast<int>(cycle_anchor_list.size());
+}
+
+
+
+/**
+ * @brief 统计所有文件合计能放下多少个完整周期
+ * @param path 数据文件路径模板（如 FILE_PATH，含 %05d）
+ * @param ffftime  首周期锚点，只用 first_frame_idx（理想起点）
+ * @return 成功：完整周期数（可能为 0）；失败：-1
+ * @note 以理想起点为基准：B = 总帧数 - first_frame_idx
+ *       B 每 30000 帧一个周期，末周期还要多 26 帧（kmax 头部补偿），
+ *       故周期数 = (B - 26) / 30000
+ */
+int64_t bin_allfile_total_cycle(const char *path,const FFFTimeAnchor &ffftime)
+{
+
+    int64_t total_frames = 0,val_f = 0;
+    
+    for(int i = FILE_START; i <= FILE_END; ++i)
+    {
+        char p[256];
+        snprintf(p,sizeof(p),path,i);
+        val_f  = bin_frame_count(p);
+        if(val_f < 0)
+            return -1;
+        total_frames += val_f;
+    }
+    /* 26 = 窗口比步进多出的 51 帧 - 头部已复用的 25 帧
+    *    WORK_PERIOD_FRM_CNT - WORK_FRAME_CNT = 51
+    *    Kmax_OFFSET = 25 */
+    const int64_t tail_need = WORK_PERIOD_FRM_CNT - WORK_FRAME_CNT - Kmax_OFFSET;
+    const int64_t available = total_frames - ffftime.first_frame_idx;
+    total_frames -= ffftime.first_frame_idx;
+    if (available < tail_need)
+        return 0;
+    return (available - tail_need) / WORK_FRAME_CNT;
+
+}
+
+/**
+ * @brief 读取周期锚点列表中所有周期数据，组装为通道优先排布的float数组，连续存入输出缓冲区
+ * @param path 数据文件路径模板（如 FILE_PATH，含 %05d）
+ * @param cycle_anchor_list 周期锚点表，由 bin_glob_frame 生成
+ * @param out 输出float缓冲区，容量必须 >= cycle_anchor_list.size() * ChanNumAll * WORK_PERIOD_ALIGN_CNT
+ * @return 0 成功；-1 失败（文件打开失败、fseek定位失败、读帧失败、文件数据耗尽）
+ * @note 数据布局 out[i][c][p]，行主序；c范围0~ChanNumAll-1，p范围0~WORK_PERIOD_ALIGN_CNT-1，通道优先，非帧优先
+ * @note 磁盘单帧结构：72B帧头 + 256通道float数据；整帧读取，减少频繁fseek破坏IO缓冲
+ * @note 单个周期共30051帧，周期起点取自 anchor.file_kmax_frame，一个周期内仅一次文件定位
+ * @note 读取过程触达文件末尾时自动切换下一个bin文件，换文件跳过8字节全局文件头，周期内帧计数不重置
+ * @note 读取帧数据时跳过72字节帧头，内存排布严格通道优先，和MATLAB对齐
+ * @note 
+ * !!
+ *  磁盘（文件里）：一帧内按通道排
+ *      帧 0:  [ch0 的32点][ch1 的32点][ch2 的32点]...[ch255 的32点]
+ *      帧 1:  [ch0 的32点][ch1 的32点][ch2 的32点]...[ch255 的32点]
+ * 
+ *  内存（out）：一个通道排到底
+ *      out ─────────────────────────────────────────────────────────
+ *      [通道0 的 961632 点]  [通道1 的 961632 点]  ...  [通道127 的 961632 点]
+ *      ├─ 帧0的32点
+ *      ├─ 帧1的32点
+ *      ├─ 帧2的32点
+ *      └─ ...
+ * !!
+ * @code
+ * vector<float> buf(cycle_anchor_list.size() * (size_t)ChanNumAll * WORK_PERIOD_ALIGN_CNT);
+ * bin_read_cycle(FILE_PATH, cycle_anchor_list, buf.data());
+ * @endcode
+ */
+
+int bin_read_cycle(const char *path, const vector<CycleAnchor> &cycle_anchor_list, float *out)
+{
+    if (cycle_anchor_list.empty())
+        return 0;
+
+    const size_t cycle_floats = (size_t)USE_CHAN_NUM * WORK_PERIOD_ALIGN_CNT;   /* 128×961632 */
+
+    for (size_t i = 0; i < cycle_anchor_list.size(); ++i)
+    {
+        const CycleAnchor &anchor = cycle_anchor_list[i];
+        float *dst = out + i * cycle_floats;            /* 本周期在 out 里的起点 */
+
+        int  file_id = anchor.file_id;
+        char p[256];
+        snprintf(p, sizeof(p), path, file_id);
+
+        FILE *fp = nullptr;
+        if (!fileop_check(fp, p))
+            return -1;
+        setvbuf(fp, nullptr, _IOFBF, 1 << 22);          /* 4 MB 缓冲，否则每帧 32 KB 会被拆成 8 次系统调用 */
+
+        /* 一次定位到本周期起点：跳过 8 字节全局头 + 前面 file_kmax_frame 个整帧 */
+        if (0 > fseeko(fp, FILE_HDR_BYTES + (off_t)anchor.file_kmax_frame * FRAME_BYTES, SEEK_SET))
+        {
+            fprintf(stderr, "[ERROR] fseeko failed, path: %s, errno: %d, msg: %s\n",
+                    p, errno, strerror(errno));
+            fclose(fp);
+            return -1;
+        }
+
+        uint8_t frame[FRAME_BYTES];                     /* 一帧缓冲：72 B 头 + 32768 B 数据 */
+        int64_t f = 0;                                  /* 本周期已读帧数，跨文件时不重置 */
+        /*读完一周期所有帧，尾部不足一帧视为垃圾，直接抛弃并打开下一文件*/
+        while (f < WORK_PERIOD_FRM_CNT)
+        {
+            size_t got = fread(frame, 1, FRAME_BYTES, fp);
+
+            if (got < FRAME_BYTES)
+            {
+                if (ferror(fp))
+                {
+                    fprintf(stderr, "[ERROR] fread failed, path: %s, errno: %d, msg: %s\n",
+                            p, errno, strerror(errno));
+                    fclose(fp);
+                    return -1;
+                }
+
+                /* 本文件读完（含尾部不足一帧的脏数据）：换下一个文件接着读，f 不推进 */
+                fclose(fp);
+                ++file_id;
+                if (file_id > FILE_END)
+                {
+                    fprintf(stderr, "[ERROR] 数据不足一个完整周期：已用尽到 SIM_%05d\n",
+                            FILE_END);
+                    return -1;
+                }
+
+                snprintf(p, sizeof(p), path, file_id);
+                if (!fileop_check(fp, p))
+                    return -1;
+                setvbuf(fp, nullptr, _IOFBF, 1 << 22);
+
+                if (0 > fseeko(fp, FILE_HDR_BYTES, SEEK_SET))   /* 新文件只跳 8 字节全局头 */
+                {
+                    fprintf(stderr, "[ERROR] fseeko failed, path: %s, errno: %d, msg: %s\n",
+                            p, errno, strerror(errno));
+                    fclose(fp);
+                    return -1;
+                }
+                continue;                                    /* 这一帧还没读到，不 ++f */
+            }
+
+            /* 跳过 72 字节帧头，只搬前 128 个通道；每个通道 32 点 = 128 字节 */
+            const uint8_t *src = frame + FRAME_HDR_BYTES;
+            /* 按通道读取，只读有效通道 */
+            for (int c = 0; c < USE_CHAN_NUM; ++c)
+                //dst + c*961632 ← 先跳到第 c 个通道
+                //再跳到这个通道里第 f 帧的 32 点
+                memcpy(dst + (size_t)c * WORK_PERIOD_ALIGN_CNT + f * FRM_NUM,
+                       src + (size_t)c * FRM_NUM * sizeof(float),
+                       FRM_NUM * sizeof(float));
+
+            ++f;
+        }
+
+        fclose(fp);
+    }
+
+    return 0;
 }
