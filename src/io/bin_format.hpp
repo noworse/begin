@@ -82,8 +82,15 @@ Kmax 表示阵列两端之间（阵元 1 到阵元 128）同一波前
 //32采样点对齐（帧对齐）实际长度,断言用
 //961632 已能被 32 整除，此宏当前是恒等变换；保留它是为了将来改 Kmax 后仍能自动补到帧边界
 #define WORK_PERIOD_ALIGN_CNT (((WORK_PERIOD_REAL_CNT+FRM_NUM-1)/FRM_NUM)*FRM_NUM)
-//一工作周期的帧数（= 961632/32 = 30051），读 bin 时的帧循环上限
+//一个通道工作周期的帧数（= 961632/32 = 30051），读 bin 时的帧循环上限
 #define WORK_PERIOD_FRM_CNT  (WORK_PERIOD_ALIGN_CNT / FRM_NUM)
+
+/* 一个周期在内存里的 float 个数 = 有效通道数 × 帧对齐点数 = 128 × 961632 = 123,088,896
+ * 走 size_t：单周期字节数 4.92 亿还在 int32 内，但多周期求和会溢出成负数，
+ * 那种 bug 表现为分配失败或越界写，回头很难追 */
+#define CYCLE_FLOATS  ((size_t)USE_CHAN_NUM * WORK_PERIOD_ALIGN_CNT)
+/* 一个周期的字节数 = 492,355,584（469.5 MiB）；D9 落盘文件必须恰好是这个大小 */
+#define CYCLE_BYTES   (CYCLE_FLOATS * sizeof(float))
 
 /**************************六、72 字节帧头内部偏移*************************/
 
@@ -101,6 +108,7 @@ Kmax 表示阵列两端之间（阵元 1 到阵元 128）同一波前
 
 //格式定义
 #define FILE_PATH "/home/waster/data/sim/SIM_%05d.bin"  /* 数据文件路径模板，%05d = 文件编号 */
+#define OUTP_PATH "/home/waster/data/ret/RER_%05d.bin"  /* 数据文件路径模板，%05d = 文件编号 */
 #define DATATIME_EXAMPLE "2024-09-29 10:00:00.000"      /* 时间串格式示例，用于核对 bin_read_time 输出 */
 #define FILE_START 1                                     /* 起始文件编号，1-based，对应 MATLAB 的 fStart */
 #define FILE_END   6                                     /* 结束文件编号 */
@@ -148,6 +156,8 @@ static_assert(FRAME_MS == 1,                         "一帧应为 1 ms（32 点
 static_assert(Kmax == 816,                           "Kmax 应与 Main_LFM_AR.m L68 的 816 一致");
 static_assert(WORK_PERIOD_REAL_CNT == 961632,        "一周期实际长度应为 961632");
 static_assert(WORK_PERIOD_ALIGN_CNT == 961632,       "帧对齐后应为 961632（961632 能被 32 整除）");
+static_assert(CYCLE_FLOATS == 123088896UL,            "一周期 float 数应为 123088896");
+static_assert(CYCLE_BYTES  == 492355584UL,            "一周期字节数应为 492355584");
 
 /**************************十、帧头接收结构体*************************/
 

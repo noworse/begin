@@ -71,5 +71,14 @@ int64_t bin_allfile_total_cycle(const char *path, const FFFTimeAnchor &ffftime);
  * 布局 out[i][c][p]，行主序，c = 0..127，p = 0..961631（通道优先）
  * 成功 0，失败 -1 */
 int bin_read_cycle(const char *path, const vector<CycleAnchor> &cycle_anchor_list, float *out);
+/**************************四、周期写盘*************************/
+
+/* 把一个完整周期（128 × 961632 个 float，通道优先连续）整块写到文件
+ * 用途：D9 对拍 —— 落盘后与 MATLAB 导出的 ArraySig0.raw 逐位比较
+ * 约束：in 长度必须 >= CYCLE_FLOATS；写出文件大小应为 CYCLE_BYTES（492,355,584）
+ * 不做任何换算、不转置：内存里怎么排就怎么写
+ * 成功 0，失败 -1（fopen / fwrite / fclose 任一失败都打印原因并返回 -1） */
+int bin_write_cycle(const char *path_write, const float *in);
+
 
 #endif // !BIN_READER_H

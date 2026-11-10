@@ -6,6 +6,7 @@
  *   frame_cycle [file]         只定位首周期起点
  *   cycles                     打印全部周期的起点帧号 / 文件归属 / 起始时刻
  *   cycle_read <k>             读第 k 个周期（1-based）并抽样自校验
+ *   cycle_dump <k> <out>       读第 k 个周期并整块落盘（D9 对拍用）
  *   frame_header <idx> [file]  读第 idx 帧的 72 字节帧头
  *   frame_data   <idx> [file]  读第 idx 帧的数据体（256×32 float）
  *   frame_date   <idx> [file]  读第 idx 帧的时间戳
@@ -23,6 +24,8 @@
 
 #include "bin_reader.hpp"
 #include <chrono>
+#include <cstdlib>
+#include <sys/stat.h>
 
 using namespace std;
 
@@ -51,6 +54,7 @@ static void usage(void)
             "  frame_cycle [file]         定位首周期起点\n"
             "  cycles                     打印全部周期\n"
             "  cycle_read <k>             读第 k 个周期（1-based）并抽样自校验\n"
+            "  cycle_dump <k> <out>       读第 k 个周期并落盘（D9 对拍用）\n"
             "  frame_header <idx> [file]  读取帧头（idx 为 0-based 帧号）\n"
             "  frame_data   <idx> [file]  读取帧数据体\n"
             "  frame_date   <idx> [file]  读取帧时间戳\n");
@@ -184,7 +188,7 @@ int main(int argc, char **argv)
     // 只做一件事：验「读出来的数对不对」。位置对不对交给 cycles 表，不在这里重复。
     else if (command_in == "cycle_read")
     {
-        // ① 必须有周期号
+        //必须有周期号
         if (argc < 3)
         {
             fprintf(stderr, "[WARN] cycle_read 需要周期号（1-based），例如 cycle_read 1\n");
@@ -192,13 +196,13 @@ int main(int argc, char **argv)
         }
         const int k = atoi(argv[2]);
 
-        // ② 定位全部周期（内部已做越界判断，这里只取用）
+        //定位全部周期（内部已做越界判断，这里只取用）
         FFFTimeAnchor ff{};
         vector<CycleAnchor> list;
         if (!locate_cycles(ff, list))
             return -1;
 
-        // ③ 越界检查仍在，因为下面要 list[k-1]，这个下标必须自己兜住
+        // 越界检查仍在，因为下面要 list[k-1]，这个下标必须自己兜住
         if (k < 1 || k > (int)list.size())
         {
             fprintf(stderr, "[ERROR] 周期号 %d 超出范围 1~%zu\n", k, list.size());
@@ -209,7 +213,7 @@ int main(int argc, char **argv)
         printf("第 %d 周期：起点 SIM_%05d 第 %lld 帧\n",
                c.cycle_id, c.file_id, (long long)c.file_kmax_frame);
 
-        // ④ 分配并读一个周期：128 通道 × 961632 点
+        // 分配并读一个周期：128 通道 × 961632 点
         const size_t cycle_floats = (size_t)USE_CHAN_NUM * WORK_PERIOD_ALIGN_CNT;
         vector<float> out(cycle_floats);
         vector<CycleAnchor> one{ c };
@@ -225,7 +229,7 @@ int main(int argc, char **argv)
         }
         printf("读完：%.1f MB，%.2f s\n", cycle_floats * sizeof(float) / 1048576.0, sec);
 
-        // ⑤ 数据对拍：用另一条路径读【同一个起点帧】，比前 4 个通道共 128 点。
+        // 数据对拍：用另一条路径读【同一个起点帧】，比前 4 个通道共 128 点。
         //    只要帧头没跳、通道顺序错、转置错、起点偏一帧，这 128 点必然不相等。
         char p[256];
         make_path(p, sizeof(p), c.file_id);
@@ -244,6 +248,126 @@ int main(int argc, char **argv)
                     ++bad;
 
         printf("对拍：通道 0~3 的第 0 帧，128 点中不一致 %d 点\n", bad);
+        if (bad != 0)
+            return -1;
+    }
+
+
+    /**************************命令：读一个周期并落盘*************************/
+    // 用法：./build/test_read cycle_dump 1 /mnt/e/.../data/cycle1.raw
+    // 只做一件事：把第 k 个周期原样写成 float32 文件，供与 MATLAB 参考数据逐位对拍。
+    // 位置对不对交给 cycles 表，这里不重复；这里只保证「写出去的就是读进来的、一个字节不少」。
+    else if (command_in == "cycle_dump")
+    {
+        if (argc < 4)
+        {
+            fprintf(stderr,
+                    "[WARN] cycle_dump 需要周期号（1-based）和输出文件，例如：\n"
+                    "       cycle_dump 1 /mnt/e/学习资料/matl/主动_c/proj_signal/data/cycle1.raw\n");
+            return -1;
+        }
+        const int   k        = atoi(argv[2]);
+        const char *out_path = argv[3];
+
+        FFFTimeAnchor ff{};
+        vector<CycleAnchor> list;
+        if (!locate_cycles(ff, list))
+            return -1;
+
+        // 下面要 list[k-1]，这个下标必须自己兜住，越界检查不能省
+        if (k < 1 || k > (int)list.size())
+        {
+            fprintf(stderr, "[ERROR] 周期号 %d 超出范围 1~%zu\n", k, list.size());
+            return -1;
+        }
+        const CycleAnchor &c = list[k - 1];
+        printf("第 %d 周期：起点 SIM_%05d 第 %lld 帧\n",
+               c.cycle_id, c.file_id, (long long)c.file_kmax_frame);
+
+        // 64 字节对齐分配：以后上 SIMD / cudaMemcpy 不用推倒重写
+        float *buf = nullptr;
+        if (posix_memalign((void **)&buf, 64, (size_t)CYCLE_BYTES) != 0 || buf == nullptr)
+        {
+            fprintf(stderr, "[ERROR] 分配 %zu 字节失败\n", (size_t)CYCLE_BYTES);
+            return -1;
+        }
+
+        // 只喂一个 anchor：函数内部按 list.size() 循环，喂 1 个就只读 1 个周期
+        vector<CycleAnchor> one{ c };
+
+        auto   t0       = chrono::steady_clock::now();
+        int    r        = bin_read_cycle(FILE_PATH, one, buf);
+        double sec_read = chrono::duration<double>(chrono::steady_clock::now() - t0).count();
+        if (r != 0)
+        {
+            printf("bin_read_cycle 失败\n");
+            free(buf);
+            return -1;
+        }
+        printf("读入：%.1f MB，%.2f s\n", CYCLE_BYTES / 1048576.0, sec_read);
+
+        t0           = chrono::steady_clock::now();
+        r            = bin_write_cycle(out_path, buf);
+        double sec_w = chrono::duration<double>(chrono::steady_clock::now() - t0).count();
+        if (r != 0)
+        {
+            printf("bin_write_cycle 失败\n");
+            free(buf);
+            return -1;
+        }
+        printf("写出：%s，%.1f MB，%.2f s\n", out_path, CYCLE_BYTES / 1048576.0, sec_w);
+
+        // 回查文件大小：写成半截时这里立刻暴露，比后面比数值便宜得多
+        struct stat st{};
+        if (stat(out_path, &st) != 0)
+        {
+            fprintf(stderr, "[ERROR] stat 失败：%s\n", out_path);
+            free(buf);
+            return -1;
+        }
+        printf("文件大小：%lld 字节（应为 %zu）\n",
+               (long long)st.st_size, (size_t)CYCLE_BYTES);
+        if ((size_t)st.st_size != (size_t)CYCLE_BYTES)
+        {
+            printf("文件大小不符，落盘不完整\n");
+            free(buf);
+            return -1;
+        }
+
+        // 回读比对：从刚写的文件里读回【首 8 点】和【末 8 点】，与内存里的比。
+        // 这条路径（文件 → 内存）跟 bin_read_cycle（磁盘 → 内存，带跳帧头/转置）完全不同，
+        // 属交叉验证，不是重复校验。
+        float  head[8] = {0};
+        float  tail[8] = {0};
+        int    bad     = 0;
+        FILE  *fp      = fopen(out_path, "rb");
+        if (fp == nullptr)
+        {
+            fprintf(stderr, "[ERROR] 回读 fopen 失败：%s\n", out_path);
+            free(buf);
+            return -1;
+        }
+        size_t n_head = fread(head, sizeof(float), 8, fp);
+        size_t n_tail = 0;
+        if (fseeko(fp, (off_t)((size_t)CYCLE_BYTES - 8 * sizeof(float)), SEEK_SET) == 0)
+            n_tail = fread(tail, sizeof(float), 8, fp);
+        fclose(fp);
+
+        if (n_head != 8 || n_tail != 8)
+        {
+            printf("回读失败：head=%zu tail=%zu\n", n_head, n_tail);
+            free(buf);
+            return -1;
+        }
+        for (int i = 0; i < 8; ++i)
+        {
+            if (head[i] != buf[i])
+                ++bad;
+            if (tail[i] != buf[(size_t)CYCLE_FLOATS - 8 + i])
+                ++bad;
+        }
+        printf("回读比对：首 8 点 ＋ 末 8 点，16 点中不一致 %d 点\n", bad);
+        free(buf);
         if (bad != 0)
             return -1;
     }
@@ -319,3 +443,5 @@ int main(int argc, char **argv)
 
     return 0;
 }
+
+

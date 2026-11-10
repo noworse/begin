@@ -7,6 +7,7 @@
  *   三、时间戳解析   帧头 date/time/ns → 字符串
  *   四、周期定位     理想起点 → 扣 Kmax → 全部周期
  *   五、全局周期推算 首周期 → 跨文件推算全部周期
+ *   六、周期写盘     整周期 float 数组 → 文件（与 MATLAB 逐位对拍）
  * 约定：帧号一律 0-based；失败统一返回 -1（错误信息写 stderr）。
  ******************************************************************************/
 
@@ -610,5 +611,56 @@ int bin_read_cycle(const char *path, const vector<CycleAnchor> &cycle_anchor_lis
         fclose(fp);
     }
 
+    return 0;
+}
+
+
+/**************************六、周期写盘*************************/
+
+/**
+ * @brief 把一个完整周期按 float32 原样写到文件，供与 MATLAB 参考数据逐位对拍
+ * @param path_write 输出文件路径（普通路径，不是含 %05d 的模板）
+ * @param in 输入缓冲区，长度必须 >= CYCLE_FLOATS（128 × 961632），通道优先连续排布
+ * @return 0 成功；-1 失败
+ * @note 不做任何数值换算、不转置：内存里怎么排就怎么写，
+ *       字节序即本机字节序（x86 / Jetson 都是小端，与 MATLAB 导出一致）
+ * @note 一次 fwrite 而不是按通道循环：in 本来就是通道优先连续的，
+ *       整块写与分段写落盘结果完全相同，分段只是多 127 次系统调用
+ * @note 469 MB 的写，磁盘满 / 配额超限基本只在 fclose 时才暴露，所以那一步必须查返回值
+ * @code
+ * bin_write_cycle("/mnt/e/.../data/cycle1.raw", buf);
+ * @endcode
+ */
+int bin_write_cycle(const char *path_write, const float *in)
+{
+    if (path_write == nullptr || in == nullptr)
+        return -1;
+
+    FILE *fp = fopen(path_write, "wb");                 /* b：明确二进制 */
+    if (fp == nullptr)
+    {
+        fprintf(stderr, "[ERROR] fopen failed, path: %s, errno: %d, msg: %s\n",
+                path_write, errno, strerror(errno));
+        return -1;
+    }
+    setvbuf(fp, nullptr, _IOFBF, 1 << 22);              /* 4 MB 缓冲，和读那边对称 */
+
+    /* 内存本身就是「通道 0 的 961632 点 → 通道 1 …」连续排布，一次写完即可 */
+    size_t w = fwrite(in, sizeof(float), (size_t)(USE_CHAN_NUM*WORK_PERIOD_ALIGN_CNT), fp);
+    if (w != (size_t)USE_CHAN_NUM*WORK_PERIOD_ALIGN_CNT)
+    {
+        fprintf(stderr, "[ERROR] fwrite short: 应写 %zu 个 float，实写 %zu，ferror=%d\n",
+                (size_t)USE_CHAN_NUM*WORK_PERIOD_ALIGN_CNT, w, ferror(fp));
+        fclose(fp);
+        return -1;
+    }
+
+    /* 469 MB 的写，错误基本只在关文件时暴露 */
+    if (fclose(fp) != 0)
+    {
+        fprintf(stderr, "[ERROR] fclose failed（磁盘满？）, path: %s, errno: %d, msg: %s\n",
+                path_write, errno, strerror(errno));
+        return -1;
+    }
     return 0;
 }
